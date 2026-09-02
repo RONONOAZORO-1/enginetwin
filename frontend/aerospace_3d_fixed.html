@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aero Engine Digital Twin | PRO</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { background-color: #0E1217; color: #E2E8F0; font-family: 'Inter', sans-serif; overflow: hidden; }
+        .glass-panel { background: rgba(23, 29, 37, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .grid-bg { background-image: radial-gradient(#1e293b 0.5px, transparent 0.5px); background-size: 30px 30px; }
+        .engine-btn { transition: all 0.3s; border-left: 2px solid transparent; }
+        .engine-btn.active { border-left: 2px solid #06b6d4; background: rgba(6, 182, 212, 0.1); color: #06b6d4; }
+        .sim-btn { border: 1px solid #334155; transition: 0.2s; }
+        .sim-btn:hover { background: #1e293b; }
+        .sim-btn.sim-active { background: #06b6d4 !important; color: #0E1217; border-color: #06b6d4; }
+
+        /* Emergency alert treatment: a slow pulsing red edge, only shown when armed */
+        #emergency-overlay {
+            position: absolute; inset: 0; pointer-events: none;
+            box-shadow: inset 0 0 0px rgba(239,68,68,0);
+            transition: box-shadow 0.6s ease;
+        }
+        #emergency-overlay.armed {
+            animation: alert-pulse 1.6s ease-in-out infinite;
+        }
+        @keyframes alert-pulse {
+            0%, 100% { box-shadow: inset 0 0 40px rgba(239,68,68,0.15); }
+            50% { box-shadow: inset 0 0 90px rgba(239,68,68,0.5); }
+        }
+
+        /* Small spinning fan glyph next to the active engine name, speed tied to RPM via CSS var */
+        #fan-glyph {
+            animation: spin linear infinite;
+            animation-duration: var(--fan-duration, 3s);
+            transform-origin: center;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @media (prefers-reduced-motion: reduce) {
+            #emergency-overlay.armed, #fan-glyph { animation: none !important; }
+        }
+    </style>
+</head>
+<body class="grid-bg h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="h-16 border-b border-gray-800 flex items-center justify-between px-8 bg-[#0E1217] z-10 shrink-0">
+        <div class="flex items-center gap-4">
+            <div class="w-8 h-8 bg-cyan-500 rounded-sm rotate-45 flex items-center justify-center">
+                <div class="w-4 h-4 border-2 border-[#0E1217]"></div>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold tracking-widest uppercase">AERO <span class="text-cyan-500">DIGITAL TWIN</span></h1>
+                <p class="text-[10px] text-gray-500 mono">SIMULATION ENGINE V2.4     STATUS: <span id="master-status" class="text-green-500">NOMINAL</span></p>
+            </div>
+        </div>
+        <div class="flex gap-8 items-center">
+            <div class="text-right">
+                <p class="text-[10px] text-gray-400 mono italic">CURRENT PHASE</p>
+                <p id="flight-phase" class="text-sm font-bold text-cyan-400 uppercase tracking-widest italic">Manual Control</p>
+            </div>
+            <div class="h-10 w-[1px] bg-gray-800"></div>
+            <div class="text-right">
+                <p class="text-[10px] text-gray-400 mono">HEALTH SCORE</p>
+                <p id="health-score" class="text-xl font-bold text-green-400">98.2%</p>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 flex overflow-hidden p-4 gap-4">
+
+        <!-- Sidebar: Model Selection & Automation -->
+        <aside class="w-72 flex flex-col gap-4">
+            <!-- Model Switcher -->
+            <div class="glass-panel p-4 rounded-lg">
+                <h3 class="text-[10px] font-bold text-gray-500 mb-3 uppercase tracking-widest">Select Engine Model</h3>
+                <div class="space-y-1">
+                    <button onclick="switchEngine('trent', this)" class="engine-btn active w-full text-left px-3 py-2 text-xs font-semibold">Trent 1000 Compressor</button>
+                    <button onclick="switchEngine('genx', this)" class="engine-btn w-full text-left px-3 py-2 text-xs font-semibold">General Electric GEnx</button>
+                    <button onclick="switchEngine('radial', this)" class="engine-btn w-full text-left px-3 py-2 text-xs font-semibold">Cylinder Radial Engine</button>
+                </div>
+            </div>
+
+            <!-- Automation Simulation Controls -->
+            <div class="glass-panel p-4 rounded-lg flex-1">
+                <h3 class="text-[10px] font-bold text-gray-500 mb-3 uppercase tracking-widest">Automation Simulation</h3>
+                <div class="grid grid-cols-1 gap-2">
+                    <button onclick="runSim('idle', this)" class="sim-btn text-[10px] py-2 rounded font-bold uppercase tracking-widest">01. Cold Start / Idle</button>
+                    <button onclick="runSim('takeoff', this)" class="sim-btn text-[10px] py-2 rounded font-bold uppercase tracking-widest">02. Full Throttle / Takeoff</button>
+                    <button onclick="runSim('cruise', this)" class="sim-btn text-[10px] py-2 rounded font-bold uppercase tracking-widest">03. Optimal Cruise</button>
+                    <button onclick="runSim('emergency', this)" class="sim-btn text-[10px] py-2 rounded font-bold uppercase tracking-widest border-red-900 text-red-500">04. Emergency / Failure</button>
+                </div>
+
+                <div class="mt-6 border-t border-gray-800 pt-4">
+                    <div class="flex justify-between text-[11px] mb-2">
+                        <span class="text-gray-400">RPM STABILITY</span>
+                        <span id="rpm-val" class="mono text-cyan-400">0</span>
+                    </div>
+                    <canvas id="miniChart" height="100"></canvas>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center: 3D Visualization -->
+        <section class="flex-1 glass-panel relative overflow-hidden rounded-lg">
+            <iframe id="engine-viewport"
+                title="Engine Model"
+                frameborder="0" allowfullscreen allow="autoplay; fullscreen"
+                src="https://sketchfab.com/models/6edf2095051c4729b7a4505e416dd1a2/embed?autostart=1&autospin=0.2&transparent=1&ui_hint=0&ui_infos=0&ui_watermark=0&ui_help=0&ui_settings=0&ui_inspector=1"
+                class="w-full h-full">
+            </iframe>
+
+            <!-- Emergency pulse treatment, sits above the iframe -->
+            <div id="emergency-overlay"></div>
+
+            <!-- HUD Overlay Details -->
+            <div class="absolute top-6 left-6 pointer-events-none">
+                <div class="flex items-center gap-2 mb-2">
+                    <div id="link-dot" class="w-2 h-2 bg-red-500 animate-pulse rounded-full"></div>
+                    <span class="text-[10px] mono text-red-500 tracking-widest font-bold">DIGITAL LINK: ACTIVE</span>
+                </div>
+                <div class="bg-black/40 p-3 rounded border border-white/10 backdrop-blur-sm">
+                    <p class="text-[9px] text-gray-500 mono uppercase mb-1 flex items-center gap-2">
+                        <svg id="fan-glyph" width="10" height="10" viewBox="0 0 10 10" style="--fan-duration:3s">
+                            <circle cx="5" cy="5" r="1.1" fill="#06b6d4"/>
+                            <path d="M5 5 L5 0.5 M5 5 L9.5 5 M5 5 L5 9.5 M5 5 L0.5 5" stroke="#06b6d4" stroke-width="1.4" stroke-linecap="round"/>
+                        </svg>
+                        <span id="engine-label">Trent 1000 Compressor</span>
+                    </p>
+                    <p id="thrust-val" class="text-xl font-bold italic mono">0.00 kN</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Sidebar: Live Telemetry -->
+        <aside class="w-80 flex flex-col gap-4">
+            <div class="glass-panel p-4 flex-1 overflow-y-auto rounded-lg">
+                <h3 class="text-[10px] font-bold text-gray-500 mb-4 uppercase tracking-widest italic">Live Telemetry Feed</h3>
+
+                <div class="space-y-6">
+                    <div>
+                        <div class="flex justify-between text-[10px] mb-1 mono">
+                            <span class="text-gray-400 italic">EGT (Exhaust Gas Temp)</span>
+                            <span id="temp-text" class="text-cyan-400">420°C</span>
+                        </div>
+                        <div class="w-full bg-gray-800 h-1 rounded-full"><div id="temp-bar" class="bg-cyan-500 h-full transition-all duration-1000" style="width: 40%"></div></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between text-[10px] mb-1 mono">
+                            <span class="text-gray-400 italic">OIL PRESSURE</span>
+                            <span id="oil-text" class="text-green-400">82 PSI</span>
+                        </div>
+                        <div class="w-full bg-gray-800 h-1 rounded-full"><div id="oil-bar" class="bg-green-500 h-full transition-all duration-1000" style="width: 82%"></div></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between text-[10px] mb-1 mono">
+                            <span class="text-gray-400 italic">VIBRATION (RMS)</span>
+                            <span id="vibe-text" class="text-gray-400">0.02 IPS</span>
+                        </div>
+                        <div class="w-full bg-gray-800 h-1 rounded-full"><div id="vibe-bar" class="bg-gray-500 h-full transition-all duration-1000" style="width: 10%"></div></div>
+                    </div>
+                </div>
+
+                <div class="mt-8 border-t border-gray-800 pt-4 h-48 overflow-y-auto pr-2" id="logs">
+                    <!-- Logs appear here -->
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <footer class="h-8 border-t border-gray-800 flex items-center justify-between px-8 bg-[#0E1217] text-[9px] mono text-gray-600 uppercase tracking-widest">
+        <div>Propulsion Digital Twin Prototype // College Hackathon MVP</div>
+        <div id="clock">00:00:00</div>
+    </footer>
+
+    <script>
+        // --- ENGINE REGISTRY ---
+        // Each engine keeps its own correct Sketchfab embed URL and a max RPM used to scale the chart/gauge.
+        const ENGINES = {
+            trent:  { name: 'Trent 1000 Compressor',    maxRpm: 12000, src: 'https://sketchfab.com/models/6edf2095051c4729b7a4505e416dd1a2/embed' },
+            genx:   { name: 'General Electric GEnx',     maxRpm: 12000, src: 'https://sketchfab.com/3d-models/engine-36c1f32d649c46df9f2f8b4d34cf32c7/embed' },
+            radial: { name: 'Cylinder Radial Engine',    maxRpm: 3200,  src: 'https://sketchfab.com/3d-models/bmw801-dynamic-parts-7e496a9d219b41c481006335e297ec2c/embed' }
+        };
+        const EMBED_PARAMS = 'autostart=1&autospin=0.2&transparent=1&ui_hint=0&ui_infos=0&ui_watermark=0&ui_help=0&ui_settings=0&ui_inspector=1';
+
+        let currentEngine = 'trent';
+        let currentMode = 'manual';
+        const stats = { rpm: 0, temp: 400, oil: 80, vibe: 0.02, thrust: 0 };
+
+        // --- SWITCH ENGINE ---
+        function switchEngine(key, btn) {
+            const engine = ENGINES[key];
+            if (!engine) return;
+            currentEngine = key;
+
+            document.querySelectorAll('.engine-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            const iframe = document.getElementById('engine-viewport');
+            iframe.src = `${engine.src}?${EMBED_PARAMS}`;
+            document.getElementById('engine-label').innerText = engine.name;
+
+            addLog(`Switched Engine Model: ${engine.name}`, 'text-cyan-400');
+        }
+
+        // --- SIMULATION ENGINE ---
+        function runSim(mode, btn) {
+            currentMode = mode;
+            document.getElementById('flight-phase').innerText = mode;
+
+            document.querySelectorAll('.sim-btn').forEach(b => b.classList.remove('sim-active'));
+            if (btn) btn.classList.add('sim-active');
+
+            const overlay = document.getElementById('emergency-overlay');
+            if (mode === 'emergency') {
+                overlay.classList.add('armed');
+            } else {
+                overlay.classList.remove('armed');
+                // Recovering out of emergency restores nominal status/health display
+                document.getElementById('health-score').className = "text-xl font-bold text-green-400";
+                document.getElementById('health-score').innerText = "98.2%";
+                document.getElementById('master-status').innerText = "NOMINAL";
+                document.getElementById('master-status').className = "text-green-500";
+            }
+
+            addLog(`Simulation Phase: ${mode.toUpperCase()}`, 'text-amber-400');
+        }
+
+        function updateTelemetry() {
+            let target = { rpm: 0, temp: 400, oil: 80, vibe: 0.05, thrust: 0 };
+
+            if (currentMode === 'idle') {
+                target = { rpm: 2200, temp: 510, oil: 75, vibe: 0.1, thrust: 12 };
+            } else if (currentMode === 'takeoff') {
+                target = { rpm: 11500, temp: 890, oil: 95, vibe: 0.4, thrust: 240 };
+            } else if (currentMode === 'cruise') {
+                target = { rpm: 8800, temp: 720, oil: 85, vibe: 0.08, thrust: 110 };
+            } else if (currentMode === 'emergency') {
+                target = { rpm: 4500, temp: 980, oil: 20, vibe: 0.95, thrust: 45 };
+                document.getElementById('health-score').className = "text-xl font-bold text-red-500";
+                document.getElementById('health-score').innerText = "42.1%";
+                document.getElementById('master-status').innerText = "CRITICAL FAILURE";
+                document.getElementById('master-status').className = "text-red-500";
+            }
+
+            // Smoothing values
+            stats.rpm += (target.rpm - stats.rpm) * 0.1;
+            stats.temp += (target.temp - stats.temp) * 0.1;
+            stats.oil += (target.oil - stats.oil) * 0.1;
+            stats.vibe += (target.vibe - stats.vibe) * 0.1;
+            stats.thrust += (target.thrust - stats.thrust) * 0.1;
+
+            // UI Update
+            document.getElementById('rpm-val').innerText = Math.floor(stats.rpm).toLocaleString();
+            document.getElementById('temp-text').innerText = `${Math.floor(stats.temp)}°C`;
+            document.getElementById('temp-bar').style.width = `${Math.min(100, (stats.temp / 1000) * 100)}%`;
+            document.getElementById('oil-text').innerText = `${Math.floor(stats.oil)} PSI`;
+            document.getElementById('oil-bar').style.width = `${Math.min(100, stats.oil)}%`;
+            document.getElementById('vibe-text').innerText = `${stats.vibe.toFixed(2)} IPS`;
+            document.getElementById('vibe-bar').style.width = `${Math.min(100, stats.vibe * 100)}%`;
+            document.getElementById('thrust-val').innerText = `${stats.thrust.toFixed(2)} kN`;
+
+            // Fan glyph spin speed reflects RPM relative to the selected engine's max RPM
+            const maxRpm = ENGINES[currentEngine].maxRpm;
+            const ratio = Math.max(stats.rpm / maxRpm, 0.02);
+            const duration = Math.max(0.15, 3.2 / (1 + ratio * 6));
+            document.getElementById('fan-glyph').style.setProperty('--fan-duration', `${duration}s`);
+
+            // Auto-Alert logic
+            if (stats.temp > 850) addLog("High Temperature Warning", "text-red-500");
+        }
+
+        // --- UTILS ---
+        function addLog(msg, color) {
+            const logs = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `text-[9px] mono mb-1 ${color}`;
+            entry.innerHTML = `[${new Date().toLocaleTimeString()}] > ${msg}`;
+            logs.prepend(entry);
+            if (logs.children.length > 20) logs.lastChild.remove();
+        }
+
+        setInterval(() => {
+            updateTelemetry();
+            document.getElementById('clock').innerText = new Date().toLocaleTimeString();
+        }, 100);
+
+        // Chart Initialization — fixed y-axis so the line doesn't jump-rescale as RPM changes
+        const ctx = document.getElementById('miniChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(20).fill(''),
+                datasets: [{
+                    data: Array(20).fill(0),
+                    borderColor: '#06b6d4',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    pointRadius: 0
+                }]
+            },
+            options: {
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { display: false, min: 0, max: 13000 },
+                    x: { display: false }
+                }
+            }
+        });
+
+        setInterval(() => {
+            chart.data.datasets[0].data.push(stats.rpm);
+            chart.data.datasets[0].data.shift();
+            chart.update('none');
+        }, 200);
+
+        addLog('System initialized. Awaiting simulation input.', 'text-gray-400');
+    </script>
+</body>
+</html>
